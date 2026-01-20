@@ -454,7 +454,7 @@ export interface TraceHandlerOptions {
  *   return traceHandler(
  *     event.platform!.context,
  *     event.request,
- *     (span) => resolve(event),
+ *     () => resolve(event),
  *     { env: event.platform?.env, serviceName: 'my-service' }
  *   );
  * };
