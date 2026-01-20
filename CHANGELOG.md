@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/tigorlazuardi/otel-cloudflare/compare/v1.0.0...v1.1.0) (2026-01-20)
+
+
+### Features
+
+* auto lifecycle management in traceHandler ([56e99c0](https://github.com/tigorlazuardi/otel-cloudflare/commit/56e99c0acdf08932964918175a0168789b175c36))
+
 # 1.0.0 (2026-01-20)
 
 

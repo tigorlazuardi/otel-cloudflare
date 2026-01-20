@@ -1,6 +1,6 @@
 {
   "name": "@tigorlazuardi/otel-cloudflare",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Helper dan Setup OpenTelemetry di Cloudflare Worker runtime",
   "type": "module",
   "main": "./dist/index.js",
