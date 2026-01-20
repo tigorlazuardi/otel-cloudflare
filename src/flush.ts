@@ -31,6 +31,25 @@ export type { OTLPExporterConfig };
 // Flush Context
 // ============================================
 
+/** Module-level FlushContext for easy access */
+let currentFlushContext: FlushContext | null = null;
+
+/**
+ * Get the current FlushContext created by initOTLP
+ *
+ * Returns null if initOTLP hasn't been called yet.
+ *
+ * @example
+ * // In traceHandler callback or anywhere after initOTLP
+ * const ctx = getFlushContext();
+ * if (ctx) {
+ *   event.platform?.context?.waitUntil(ctx.flush());
+ * }
+ */
+export function getFlushContext(): FlushContext | null {
+  return currentFlushContext;
+}
+
 /**
  * Flush context for managing collectors in a request lifecycle
  */
@@ -109,7 +128,7 @@ export function initOTLP(
     setOTLPLogHandler(logHandler);
   }
 
-  return {
+  const ctx: FlushContext = {
     get spans() {
       return spanProcessor.getSpans() as ExportableSpan[];
     },
@@ -153,8 +172,12 @@ export function initOTLP(
       await this.flush();
       setSpanProcessor(null);
       setOTLPLogHandler(null);
+      currentFlushContext = null;
     },
   };
+
+  currentFlushContext = ctx;
+  return ctx;
 }
 
 // ============================================

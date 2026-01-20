@@ -80,6 +80,7 @@ export {
 // Force flush API (for SvelteKit and other non-standard contexts)
 export {
   initOTLP,
+  getFlushContext,
   flushTraces,
   flushLogs,
   flushAll,

@@ -416,6 +416,24 @@ export interface TraceHandlerOptions {
    * Same format as InstrumentOptionsObject.ignoreUrls
    */
   ignoreUrls?: (string | RegExp)[];
+
+  /**
+   * Environment variables for OTLP configuration
+   * If provided, traceHandler will automatically init and flush telemetry
+   */
+  env?: Record<string, unknown>;
+
+  /**
+   * Service name for telemetry (required if env is provided)
+   */
+  serviceName?: string;
+
+  /**
+   * Cloudflare's waitUntil function for non-blocking flush
+   * If provided, flush will be called via waitUntil
+   * If not provided, flush will be awaited (blocking)
+   */
+  waitUntil?: (promise: Promise<unknown>) => void;
 }
 
 /**
@@ -428,50 +446,59 @@ export interface TraceHandlerOptions {
  * - Captures request/response body (truncated to 8KB, text-based content only)
  * - Logs request summary with method, path, status, size, and duration
  * - Adds traceparent header to response for downstream correlation
- *
- * IMPORTANT: Call initOTLP() before using this function to set up collectors.
- * Call flush() after the request completes to export telemetry.
+ * - Automatically initializes OTLP and flushes telemetry when env/serviceName provided
  *
  * @example
- * // SvelteKit hooks.server.ts
- * import { initOTLP, traceHandler } from '@tigorlazuardi/otel-cloudflare';
+ * // SvelteKit hooks.server.ts - automatic lifecycle management
+ * import { traceHandler } from '@tigorlazuardi/otel-cloudflare';
  *
- * export async function handle({ event, resolve }) {
- *   const ctx = initOTLP(event.platform?.env, 'my-service');
- *
- *   try {
- *     return await traceHandler(event.request, async (span) => {
- *       // Add custom attributes to span
- *       span.setAttribute('user.id', event.locals.userId);
- *       return resolve(event);
- *     });
- *   } finally {
- *     if (event.platform?.context?.waitUntil) {
- *       event.platform.context.waitUntil(ctx.flush());
- *     } else {
- *       await ctx.flush();
- *     }
- *   }
- * }
+ * export const handle: Handle = async ({ event, resolve }) => {
+ *   return traceHandler(event.request, (span) => resolve(event), {
+ *     env: event.platform?.env,
+ *     serviceName: 'my-service',
+ *     waitUntil: event.platform?.context?.waitUntil,
+ *   });
+ * };
  *
  * @example
  * // With ignoreUrls option
- * return await traceHandler(
- *   event.request,
- *   (span) => resolve(event),
- *   { ignoreUrls: ["/health", /^\/api\/internal\//] }
- * );
+ * return traceHandler(event.request, (span) => resolve(event), {
+ *   env: event.platform?.env,
+ *   serviceName: 'my-service',
+ *   waitUntil: event.platform?.context?.waitUntil,
+ *   ignoreUrls: ["/health", /^\/api\/internal\//],
+ * });
  */
 export async function traceHandler(
   request: Request,
   handler: (span: Span) => Promise<Response>,
   options?: TraceHandlerOptions,
 ): Promise<Response> {
+  // Initialize OTLP if env and serviceName provided
+  const flushCtx =
+    options?.env && options?.serviceName
+      ? initOTLP(options.env, options.serviceName)
+      : null;
+
+  const doFlush = () => {
+    if (flushCtx) {
+      const flushPromise = flushCtx.flush();
+      if (options?.waitUntil) {
+        options.waitUntil(flushPromise);
+      } else {
+        return flushPromise;
+      }
+    }
+    return Promise.resolve();
+  };
+
   // Skip tracing for ignored URLs - pass a no-op span
   if (shouldIgnoreUrl(request, options?.ignoreUrls)) {
     const noopSpan = trace.getTracer("otel-cloudflare").startSpan("noop");
     noopSpan.end();
-    return handler(noopSpan);
+    const response = await handler(noopSpan);
+    await doFlush();
+    return response;
   }
 
   // Extract traceparent from request headers
@@ -491,7 +518,7 @@ export async function traceHandler(
     parentContext = trace.setSpan(context.active(), parentSpan);
   }
 
-  return context.with(parentContext, () => {
+  const response = await context.with(parentContext, () => {
     return tracer.startActiveSpan(
       spanName,
       {
@@ -612,6 +639,7 @@ export async function traceHandler(
           if (traceparent) {
             errorHeaders["traceparent"] = traceparent;
           }
+
           return new Response(`Internal Server Error\nRequest ID: ${traceId}`, {
             status: 500,
             headers: errorHeaders,
@@ -620,6 +648,10 @@ export async function traceHandler(
       },
     );
   });
+
+  // Flush telemetry (uses waitUntil if provided, otherwise awaits)
+  await doFlush();
+  return response;
 }
 
 /**

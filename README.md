@@ -2,7 +2,7 @@
 
 Lightweight OpenTelemetry helpers for Cloudflare Workers runtime.
 
-**[API Documentation](https://otel-cloudflare.pages.dev)**
+**[API Documentation](https://otel-cloudflare.tigor.dev)**
 
 This library provides:
 - **Trace context propagation** across services (fetch → queue → consumer)
@@ -62,32 +62,18 @@ export default instrument({
 
 ### SvelteKit / Custom Handlers
 
-Use `traceHandler()` for full HTTP instrumentation:
+Use `traceHandler()` for full HTTP instrumentation with automatic lifecycle management:
 
 ```typescript
 // hooks.server.ts
-import { initOTLP, traceHandler, getLogger } from "@tigorlazuardi/otel-cloudflare";
+import { traceHandler } from "@tigorlazuardi/otel-cloudflare";
 
 export const handle: Handle = async ({ event, resolve }) => {
-  const ctx = initOTLP(event.platform?.env, "my-service");
-
-  try {
-    return await traceHandler(event.request, async (span) => {
-      const logger = getLogger();
-      logger.info("handling request"); // [trace_id] handling request
-
-      // Add custom attributes to span
-      span.setAttribute("user.id", event.locals.userId);
-
-      return resolve(event);
-    });
-  } finally {
-    if (event.platform?.context?.waitUntil) {
-      event.platform.context.waitUntil(ctx.flush());
-    } else {
-      await ctx.flush();
-    }
-  }
+  return traceHandler(event.request, (span) => resolve(event), {
+    env: event.platform?.env,
+    serviceName: "my-service",
+    waitUntil: event.platform?.context?.waitUntil,
+  });
 };
 ```
 
@@ -289,6 +275,7 @@ Each created span has the following attributes:
 | Function | Description |
 |----------|-------------|
 | `instrument(handler, opts?)` | Wrap ExportedHandler with auto trace context |
+| `traceHandler(request, handler, opts?)` | Trace HTTP request for SvelteKit/custom handlers |
 | `withTraceContext(body)` | Inject `_traceparent` into message body for queue propagation |
 | `initTracing()` | Initialize TracerProvider (called automatically by `instrument`) |
 
