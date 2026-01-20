@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "otel-test-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+    },
+  },
+  "env": {
+    "test": {
+      "vars": {
+        "OTEL_SERVICE_NAME": "otel-test-worker-cloudflare",
+        "OTEL_RESOURCE_ATTRIBUTES": "deploy.environment.name=test",
+      },
+      "workers_dev": true,
+    },
+  },
+}

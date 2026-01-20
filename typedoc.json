@@ -1,0 +1,33 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["./src/index.ts"],
+  "out": "docs",
+  "name": "@tigorlazuardi/otel-cloudflare",
+  "readme": "./README.md",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "categorizeByGroup": true,
+  "navigationLinks": {
+    "GitHub": "https://github.com/tigorlazuardi/otel-cloudflare"
+  },
+  "exclude": ["**/*.test.ts", "**/*.spec.ts"],
+  "skipErrorChecking": true,
+  "highlightLanguages": [
+    "bash",
+    "console",
+    "css",
+    "html",
+    "javascript",
+    "json",
+    "jsonc",
+    "json5",
+    "tsx",
+    "typescript",
+    "toml",
+    "yaml"
+  ],
+  "plugin": [],
+  "tsconfig": "./tsconfig.json"
+}

@@ -1,0 +1,71 @@
+{
+  "name": "@tigorlazuardi/otel-cloudflare",
+  "version": "7.1.0",
+  "description": "Helper dan Setup OpenTelemetry di Cloudflare Worker runtime",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "docs:build": "typedoc && mv docs/functions docs/fn && find docs -name '*.html' -exec sed -i 's|functions/|fn/|g' {} + && node scripts/fix-typedoc-nav.js",
+    "docs:watch": "typedoc --watch",
+    "docs:deploy": "pnpm docs:build && wrangler pages deploy docs --project-name=otel-cloudflare-docs"
+  },
+  "keywords": [
+    "opentelemetry",
+    "cloudflare",
+    "workers",
+    "tracing",
+    "logging"
+  ],
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "workerd",
+      "esbuild"
+    ]
+  },
+  "author": "Tigor Hutasuhut <tigor.hutasuhut@gmail.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tigorlazuardi/otel-cloudflare.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241216.0",
+    "@eslint/js": "^9.39.2",
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.39.2",
+    "semantic-release": "^25.0.2",
+    "typedoc": "^0.28.16",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.53.0",
+    "vitest": "^2.1.8",
+    "wrangler": "^4.59.2"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "dependencies": {
+    "@opentelemetry/resources": "^2.3.0",
+    "@opentelemetry/semantic-conventions": "^1.38.0"
+  }
+}

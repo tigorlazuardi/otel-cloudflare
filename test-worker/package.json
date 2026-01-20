@@ -1,0 +1,20 @@
+{
+  "name": "test-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260109.0",
+    "@types/node": "^25.0.5",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.58.0"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0"
+  }
+}
