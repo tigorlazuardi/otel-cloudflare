@@ -412,28 +412,21 @@ function resolveOptions<Env>(
  */
 export interface TraceHandlerOptions {
   /**
-   * URL patterns to ignore from tracing
-   * Same format as InstrumentOptionsObject.ignoreUrls
-   */
-  ignoreUrls?: (string | RegExp)[];
-
-  /**
    * Environment variables for OTLP configuration
-   * If provided, traceHandler will automatically init and flush telemetry
    */
   env?: Record<string, unknown>;
 
   /**
-   * Service name for telemetry (required if env is provided)
+   * Service name for telemetry
+   * @default "unknown"
    */
   serviceName?: string;
 
   /**
-   * Cloudflare's waitUntil function for non-blocking flush
-   * If provided, flush will be called via waitUntil
-   * If not provided, flush will be awaited (blocking)
+   * URL patterns to ignore from tracing
+   * Same format as InstrumentOptionsObject.ignoreUrls
    */
-  waitUntil?: (promise: Promise<unknown>) => void;
+  ignoreUrls?: (string | RegExp)[];
 }
 
 /**
@@ -446,212 +439,205 @@ export interface TraceHandlerOptions {
  * - Captures request/response body (truncated to 8KB, text-based content only)
  * - Logs request summary with method, path, status, size, and duration
  * - Adds traceparent header to response for downstream correlation
- * - Automatically initializes OTLP and flushes telemetry when env/serviceName provided
+ * - Automatically initializes OTLP and flushes telemetry via ctx.waitUntil
+ *
+ * @param ctx - Cloudflare ExecutionContext (provides waitUntil for non-blocking flush)
+ * @param request - The incoming HTTP request
+ * @param handler - The request handler function that receives the span
+ * @param options - Optional configuration
  *
  * @example
- * // SvelteKit hooks.server.ts - automatic lifecycle management
+ * // SvelteKit hooks.server.ts
  * import { traceHandler } from '@tigorlazuardi/otel-cloudflare';
  *
  * export const handle: Handle = async ({ event, resolve }) => {
- *   return traceHandler(event.request, (span) => resolve(event), {
- *     env: event.platform?.env,
- *     serviceName: 'my-service',
- *     waitUntil: event.platform?.context?.waitUntil,
- *   });
+ *   return traceHandler(
+ *     event.platform!.context,
+ *     event.request,
+ *     (span) => resolve(event),
+ *     { env: event.platform?.env, serviceName: 'my-service' }
+ *   );
  * };
  *
  * @example
- * // With ignoreUrls option
- * return traceHandler(event.request, (span) => resolve(event), {
- *   env: event.platform?.env,
- *   serviceName: 'my-service',
- *   waitUntil: event.platform?.context?.waitUntil,
- *   ignoreUrls: ["/health", /^\/api\/internal\//],
- * });
+ * // Next.js with OpenNext Cloudflare
+ * import { traceHandler } from '@tigorlazuardi/otel-cloudflare';
+ * import { getCloudflareContext } from '@opennextjs/cloudflare';
+ *
+ * export async function middleware(request: NextRequest) {
+ *   const { env, ctx } = await getCloudflareContext();
+ *   return traceHandler(ctx, request, () => NextResponse.next(), { env, serviceName: 'my-app' });
+ * }
  */
 export async function traceHandler(
+  ctx: ExecutionContext,
   request: Request,
   handler: (span: Span) => Promise<Response>,
   options?: TraceHandlerOptions,
 ): Promise<Response> {
-  // Initialize OTLP if env and serviceName provided
-  const flushCtx =
-    options?.env && options?.serviceName
-      ? initOTLP(options.env, options.serviceName)
+  // Initialize OTLP
+  const flushCtx = initOTLP(options?.env, options?.serviceName ?? "unknown");
+
+  try {
+    // Skip tracing for ignored URLs - pass a no-op span
+    if (shouldIgnoreUrl(request, options?.ignoreUrls)) {
+      const noopSpan = trace.getTracer("otel-cloudflare").startSpan("noop");
+      noopSpan.end();
+      return await handler(noopSpan);
+    }
+
+    // Extract traceparent from request headers
+    const incomingTraceparent = request.headers.get("traceparent");
+    const parentSpanContext = incomingTraceparent
+      ? spanContextFromTraceparent(incomingTraceparent)
       : null;
 
-  const doFlush = () => {
-    if (flushCtx) {
-      const flushPromise = flushCtx.flush();
-      if (options?.waitUntil) {
-        options.waitUntil(flushPromise);
-      } else {
-        return flushPromise;
-      }
+    const tracer = trace.getTracer("otel-cloudflare");
+    const url = new URL(request.url);
+    const spanName = `${request.method} ${url.pathname}`;
+
+    // Set up parent context
+    let parentContext = context.active();
+    if (parentSpanContext) {
+      const parentSpan = trace.wrapSpanContext(parentSpanContext);
+      parentContext = trace.setSpan(context.active(), parentSpan);
     }
-    return Promise.resolve();
-  };
 
-  // Skip tracing for ignored URLs - pass a no-op span
-  if (shouldIgnoreUrl(request, options?.ignoreUrls)) {
-    const noopSpan = trace.getTracer("otel-cloudflare").startSpan("noop");
-    noopSpan.end();
-    const response = await handler(noopSpan);
-    await doFlush();
-    return response;
-  }
-
-  // Extract traceparent from request headers
-  const incomingTraceparent = request.headers.get("traceparent");
-  const parentSpanContext = incomingTraceparent
-    ? spanContextFromTraceparent(incomingTraceparent)
-    : null;
-
-  const tracer = trace.getTracer("otel-cloudflare");
-  const url = new URL(request.url);
-  const spanName = `${request.method} ${url.pathname}`;
-
-  // Set up parent context
-  let parentContext = context.active();
-  if (parentSpanContext) {
-    const parentSpan = trace.wrapSpanContext(parentSpanContext);
-    parentContext = trace.setSpan(context.active(), parentSpan);
-  }
-
-  const response = await context.with(parentContext, () => {
-    return tracer.startActiveSpan(
-      spanName,
-      {
-        kind: SpanKind.SERVER,
-        attributes: {
-          "http.request.method": request.method,
-          "url.full": request.url,
-          "url.scheme": url.protocol.replace(":", ""),
-          "url.path": url.pathname,
-          "url.query": url.search ? url.search.slice(1) : undefined,
-          "server.address": url.hostname,
-          "server.port": url.port
-            ? parseInt(url.port, 10)
-            : url.protocol === "https:"
-              ? 443
-              : 80,
+    return await context.with(parentContext, () => {
+      return tracer.startActiveSpan(
+        spanName,
+        {
+          kind: SpanKind.SERVER,
+          attributes: {
+            "http.request.method": request.method,
+            "url.full": request.url,
+            "url.scheme": url.protocol.replace(":", ""),
+            "url.path": url.pathname,
+            "url.query": url.search ? url.search.slice(1) : undefined,
+            "server.address": url.hostname,
+            "server.port": url.port
+              ? parseInt(url.port, 10)
+              : url.protocol === "https:"
+                ? 443
+                : 80,
+          },
         },
-      },
-      async (span) => {
-        // Get traceparent for response header
-        const traceparent = getTraceparent();
-        const startTime = Date.now();
-        const userAgent = request.headers.get("user-agent");
+        async (span) => {
+          // Get traceparent for response header
+          const traceparent = getTraceparent();
+          const startTime = Date.now();
+          const userAgent = request.headers.get("user-agent");
 
-        // Capture request body (truncated, only for text-based content)
-        // Note: We only capture for logging, the handler receives the original request
-        // For SvelteKit, the body is usually not consumed before resolve()
-        const requestContentType = request.headers.get("content-type");
-        const [requestBody, _requestBodyStream] = await readBodyWithTruncate(
-          request.body,
-          requestContentType,
-        );
-
-        try {
-          const response = await handler(span);
-          const duration = Date.now() - startTime;
-
-          // Capture response body (truncated, only for text-based content)
-          const responseContentType = response.headers.get("content-type");
-          const [responseBody, responseBodyStream] = await readBodyWithTruncate(
-            response.body,
-            responseContentType,
+          // Capture request body (truncated, only for text-based content)
+          // Note: We only capture for logging, the handler receives the original request
+          // For SvelteKit, the body is usually not consumed before resolve()
+          const requestContentType = request.headers.get("content-type");
+          const [requestBody, _requestBodyStream] = await readBodyWithTruncate(
+            request.body,
+            requestContentType,
           );
 
-          // Get response size from Content-Length header or actual body length
-          const contentLength = response.headers.get("content-length");
-          const bytes = contentLength
-            ? parseInt(contentLength, 10)
-            : responseBody.length;
+          try {
+            const response = await handler(span);
+            const duration = Date.now() - startTime;
 
-          // Record status code and set error status if >= 400
-          span.setAttribute("http.response.status_code", response.status);
-          if (response.status >= 400) {
+            // Capture response body (truncated, only for text-based content)
+            const responseContentType = response.headers.get("content-type");
+            const [responseBody, responseBodyStream] =
+              await readBodyWithTruncate(response.body, responseContentType);
+
+            // Get response size from Content-Length header or actual body length
+            const contentLength = response.headers.get("content-length");
+            const bytes = contentLength
+              ? parseInt(contentLength, 10)
+              : responseBody.length;
+
+            // Record status code and set error status if >= 400
+            span.setAttribute("http.response.status_code", response.status);
+            if (response.status >= 400) {
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: `HTTP ${response.status}`,
+              });
+            }
+
+            span.end();
+
+            // Log request summary with bodies
+            const logMessage = `${request.method} ${url.pathname} - ${response.status} - ${formatBytes(bytes)} - ${formatDuration(duration)}`;
+            const logAttrs: Record<string, unknown> = {};
+            if (userAgent) {
+              logAttrs.userAgent = userAgent;
+            }
+            if (requestBody) {
+              logAttrs.requestBody = requestBody;
+            }
+            if (responseBody) {
+              logAttrs.responseBody = responseBody;
+            }
+
+            if (response.status >= 400) {
+              getLogger().error(logMessage, logAttrs);
+            } else {
+              getLogger().info(logMessage, logAttrs);
+            }
+
+            // Build response with traceparent header
+            const headers = new Headers(response.headers);
+            if (traceparent) {
+              headers.set("traceparent", traceparent);
+            }
+
+            return new Response(responseBodyStream, {
+              status: response.status,
+              statusText: response.statusText,
+              headers,
+            });
+          } catch (error) {
+            const traceId = span.spanContext().traceId;
+            const duration = Date.now() - startTime;
+
+            // Log the error
+            getLogger().error(
+              `${request.method} ${url.pathname} - 500 - ${formatDuration(duration)}`,
+              {
+                error: (error as Error).message,
+                stack: (error as Error).stack,
+                userAgent,
+              },
+            );
+
+            span.recordException(error as Error);
+            span.setAttribute("http.response.status_code", 500);
             span.setStatus({
               code: SpanStatusCode.ERROR,
-              message: `HTTP ${response.status}`,
+              message: (error as Error).message,
             });
+            span.end();
+
+            // Return error response with Request ID (trace ID)
+            const errorHeaders: Record<string, string> = {
+              "Content-Type": "text/plain",
+            };
+            if (traceparent) {
+              errorHeaders["traceparent"] = traceparent;
+            }
+
+            return new Response(
+              `Internal Server Error\nRequest ID: ${traceId}`,
+              {
+                status: 500,
+                headers: errorHeaders,
+              },
+            );
           }
-
-          span.end();
-
-          // Log request summary with bodies
-          const logMessage = `${request.method} ${url.pathname} - ${response.status} - ${formatBytes(bytes)} - ${formatDuration(duration)}`;
-          const logAttrs: Record<string, unknown> = {};
-          if (userAgent) {
-            logAttrs.userAgent = userAgent;
-          }
-          if (requestBody) {
-            logAttrs.requestBody = requestBody;
-          }
-          if (responseBody) {
-            logAttrs.responseBody = responseBody;
-          }
-
-          if (response.status >= 400) {
-            getLogger().error(logMessage, logAttrs);
-          } else {
-            getLogger().info(logMessage, logAttrs);
-          }
-
-          // Build response with traceparent header
-          const headers = new Headers(response.headers);
-          if (traceparent) {
-            headers.set("traceparent", traceparent);
-          }
-
-          return new Response(responseBodyStream, {
-            status: response.status,
-            statusText: response.statusText,
-            headers,
-          });
-        } catch (error) {
-          const traceId = span.spanContext().traceId;
-          const duration = Date.now() - startTime;
-
-          // Log the error
-          getLogger().error(
-            `${request.method} ${url.pathname} - 500 - ${formatDuration(duration)}`,
-            {
-              error: (error as Error).message,
-              stack: (error as Error).stack,
-              userAgent,
-            },
-          );
-
-          span.recordException(error as Error);
-          span.setAttribute("http.response.status_code", 500);
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: (error as Error).message,
-          });
-          span.end();
-
-          // Return error response with Request ID (trace ID)
-          const errorHeaders: Record<string, string> = {
-            "Content-Type": "text/plain",
-          };
-          if (traceparent) {
-            errorHeaders["traceparent"] = traceparent;
-          }
-
-          return new Response(`Internal Server Error\nRequest ID: ${traceId}`, {
-            status: 500,
-            headers: errorHeaders,
-          });
-        }
-      },
-    );
-  });
-
-  // Flush telemetry (uses waitUntil if provided, otherwise awaits)
-  await doFlush();
-  return response;
+        },
+      );
+    });
+  } finally {
+    // Always flush telemetry via waitUntil (non-blocking)
+    ctx.waitUntil(flushCtx.flush());
+  }
 }
 
 /**

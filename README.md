@@ -60,7 +60,7 @@ export default instrument({
 });
 ```
 
-### SvelteKit / Custom Handlers
+### SvelteKit
 
 Use `traceHandler()` for full HTTP instrumentation with automatic lifecycle management:
 
@@ -69,11 +69,37 @@ Use `traceHandler()` for full HTTP instrumentation with automatic lifecycle mana
 import { traceHandler } from "@tigorlazuardi/otel-cloudflare";
 
 export const handle: Handle = async ({ event, resolve }) => {
-  return traceHandler(event.request, (span) => resolve(event), {
-    env: event.platform?.env,
-    serviceName: "my-service",
-    waitUntil: event.platform?.context?.waitUntil,
-  });
+  return traceHandler(
+    event.platform!.context,
+    event.request,
+    (span) => resolve(event),
+    { env: event.platform?.env, serviceName: "my-service" }
+  );
+};
+```
+
+### Next.js (OpenNext Cloudflare)
+
+```typescript
+// middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { traceHandler } from "@tigorlazuardi/otel-cloudflare";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+export async function middleware(request: NextRequest) {
+  const { env, ctx } = await getCloudflareContext();
+  
+  return traceHandler(
+    ctx,
+    request,
+    async (span) => NextResponse.next(),
+    { env, serviceName: "my-nextjs-app" }
+  );
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
 ```
 
