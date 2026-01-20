@@ -14,7 +14,6 @@ This library provides:
 1. Add `.npmrc` to your project root:
 ```
 @tigorlazuardi:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=<YOUR_TOKEN>
 ```
 
 2. Install the package:
