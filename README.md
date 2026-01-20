@@ -62,41 +62,32 @@ export default instrument({
 
 ### SvelteKit / Custom Handlers
 
-Use `withTrace()` with `parent` option:
+Use `traceHandler()` for full HTTP instrumentation:
 
 ```typescript
 // hooks.server.ts
-import { 
-  Logger, 
-  withTrace, 
-  getTraceparent,
-  initTracing,
-} from "@tigorlazuardi/otel-cloudflare";
-
-// Initialize once
-initTracing();
+import { initOTLP, traceHandler, getLogger } from "@tigorlazuardi/otel-cloudflare";
 
 export const handle: Handle = async ({ event, resolve }) => {
-  const traceparent = event.request.headers.get("traceparent");
+  const ctx = initOTLP(event.platform?.env, "my-service");
 
-  return withTrace(
-    async () => {
-      const logger = new Logger();
+  try {
+    return await traceHandler(event.request, async (span) => {
+      const logger = getLogger();
       logger.info("handling request"); // [trace_id] handling request
 
-      // Get current traceparent for propagation
-      const currentTrace = getTraceparent();
-      
-      // Send to queue with trace context
-      await env.QUEUE.send({ 
-        data: payload,
-        _traceparent: currentTrace 
-      });
+      // Add custom attributes to span
+      span.setAttribute("user.id", event.locals.userId);
 
       return resolve(event);
-    },
-    { parent: traceparent, name: "handleRequest" }
-  );
+    });
+  } finally {
+    if (event.platform?.context?.waitUntil) {
+      event.platform.context.waitUntil(ctx.flush());
+    } else {
+      await ctx.flush();
+    }
+  }
 };
 ```
 
